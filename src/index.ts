@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import { corsMiddleware } from './middleware/cors';
 import { errorHandler } from './middleware/errorHandler';
 import authRoutes from './routes/auth';
+import contatoRoutes from './routes/contato';
 
 dotenv.config();
 
@@ -19,6 +20,7 @@ app.get('/health', (req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/contato', contatoRoutes);
 
 // Error handler (must be last)
 app.use(errorHandler);
