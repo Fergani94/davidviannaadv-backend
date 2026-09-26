@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { supabase } from '../services/supabase';
 import { ApiError } from '../middleware/errorHandler';
 import { AuthenticatedRequest } from '../middleware/auth';
@@ -120,7 +120,7 @@ export async function gerarLinkDepoimento(req: AuthenticatedRequest, res: Respon
       return;
     }
 
-    const token = uuidv4();
+    const token = randomUUID();
     const expira_em = new Date();
     expira_em.setDate(expira_em.getDate() + 30); // 30 days expiration
 
