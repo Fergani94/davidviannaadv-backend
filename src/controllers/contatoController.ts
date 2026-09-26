@@ -34,8 +34,7 @@ export async function enviarContato(req: Request, res: Response, next: NextFunct
         telefone,
         email,
         area_interesse,
-        mensagem,
-        criado_em: new Date().toISOString()
+        mensagem
       }]);
 
     if (insertError) {

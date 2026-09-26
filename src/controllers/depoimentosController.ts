@@ -9,9 +9,9 @@ export async function obterDepoimentos(req: Request, res: Response, next: NextFu
   try {
     const { data, error } = await supabase
       .from('depoimentos')
-      .select('id, cliente_nome, depoimento, profissao, foto_url, criado_em')
+      .select('id, nome, texto, created_at')
       .eq('status', 'aprovado')
-      .order('criado_em', { ascending: false });
+      .order('created_at', { ascending: false });
 
     if (error) {
       const apiError: ApiError = new Error('Erro ao buscar depoimentos');
@@ -32,72 +32,56 @@ export async function obterDepoimentos(req: Request, res: Response, next: NextFu
 // Submit testimonial with token validation
 export async function enviarDepoimento(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { token, cliente_nome, depoimento, profissao, foto_url } = req.body;
+    const { token, nome, texto } = req.body;
 
-    // Validate required fields
-    if (!token || !cliente_nome || !depoimento) {
-      const error: ApiError = new Error('Token, nome do cliente e depoimento são obrigatórios');
+    if (!token || !nome || !texto) {
+      const error: ApiError = new Error('Token, nome e depoimento são obrigatórios');
       error.statusCode = 400;
       next(error);
       return;
     }
 
-    // Validate token from database
-    const { data: tokenData, error: tokenError } = await supabase
-      .from('tokens_depoimentos')
-      .select('id, expira_em, usado')
+    // Token lives on a placeholder row created by the admin (status 'aguardando')
+    const { data: row, error: tokenError } = await supabase
+      .from('depoimentos')
+      .select('id, token_expires_at')
       .eq('token', token)
-      .single();
+      .eq('status', 'aguardando')
+      .maybeSingle();
 
-    if (tokenError || !tokenData) {
-      const error: ApiError = new Error('Token inválido');
+    if (tokenError || !row) {
+      const error: ApiError = new Error('Token inválido ou já utilizado');
       error.statusCode = 400;
       next(error);
       return;
     }
 
-    // Check if token is already used
-    if (tokenData.usado) {
-      const error: ApiError = new Error('Token já foi utilizado');
-      error.statusCode = 400;
-      next(error);
-      return;
-    }
-
-    // Check token expiration (30 days)
-    const tokenExpiration = new Date(tokenData.expira_em);
-    if (new Date() > tokenExpiration) {
+    if (row.token_expires_at && new Date() > new Date(row.token_expires_at)) {
       const error: ApiError = new Error('Token expirado');
       error.statusCode = 400;
       next(error);
       return;
     }
 
-    // Save testimonial
-    const { error: insertError } = await supabase
+    // Fill the row and burn the token
+    const { error: updateError } = await supabase
       .from('depoimentos')
-      .insert([{
-        cliente_nome,
-        depoimento,
-        profissao: profissao || null,
-        foto_url: foto_url || null,
+      .update({
+        nome,
+        texto,
         status: 'pendente',
-        criado_em: new Date().toISOString(),
-        token_id: tokenData.id
-      }]);
+        token: null,
+        token_expires_at: null,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', row.id);
 
-    if (insertError) {
+    if (updateError) {
       const error: ApiError = new Error('Erro ao salvar depoimento');
       error.statusCode = 500;
       next(error);
       return;
     }
-
-    // Mark token as used
-    await supabase
-      .from('tokens_depoimentos')
-      .update({ usado: true, usado_em: new Date().toISOString() })
-      .eq('id', tokenData.id);
 
     res.status(201).json({
       success: true,
@@ -111,30 +95,20 @@ export async function enviarDepoimento(req: Request, res: Response, next: NextFu
 // Generate unique token for client (protected)
 export async function gerarLinkDepoimento(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
   try {
-    const { cliente_email } = req.body;
-
-    if (!cliente_email) {
-      const error: ApiError = new Error('Email do cliente é obrigatório');
-      error.statusCode = 400;
-      next(error);
-      return;
-    }
-
     const token = randomUUID();
     const expira_em = new Date();
     expira_em.setDate(expira_em.getDate() + 30); // 30 days expiration
 
-    const { data, error } = await supabase
-      .from('tokens_depoimentos')
+    // Placeholder row: nome/texto are NOT NULL, filled in when the client submits
+    const { error } = await supabase
+      .from('depoimentos')
       .insert([{
+        nome: '',
+        texto: '',
+        status: 'aguardando',
         token,
-        cliente_email,
-        criado_por: req.user?.userId,
-        criado_em: new Date().toISOString(),
-        expira_em: expira_em.toISOString(),
-        usado: false
-      }])
-      .select();
+        token_expires_at: expira_em.toISOString()
+      }]);
 
     if (error) {
       const apiError: ApiError = new Error('Erro ao gerar link');
@@ -143,8 +117,7 @@ export async function gerarLinkDepoimento(req: AuthenticatedRequest, res: Respon
       return;
     }
 
-    // In a real scenario, you would send this link to the client via email
-    const linkDepoimento = `${process.env.FRONTEND_URL}/depoimentos/submit?token=${token}`;
+    const linkDepoimento = `${process.env.FRONTEND_URL}/depoimento/${token}`;
 
     res.status(201).json({
       success: true,
@@ -165,7 +138,8 @@ export async function obterDepoimentosAdmin(req: AuthenticatedRequest, res: Resp
 
     let query = supabase
       .from('depoimentos')
-      .select('id, cliente_nome, depoimento, profissao, foto_url, status, criado_em', { count: 'exact' });
+      .select('id, nome, texto, status, created_at, updated_at', { count: 'exact' })
+      .neq('status', 'aguardando');
 
     if (status && status !== 'todos') {
       query = query.eq('status', status as string);
@@ -173,7 +147,7 @@ export async function obterDepoimentosAdmin(req: AuthenticatedRequest, res: Resp
 
     const offset = (Number(pagina) - 1) * Number(limite);
     const { data, error, count } = await query
-      .order('criado_em', { ascending: false })
+      .order('created_at', { ascending: false })
       .range(offset, offset + Number(limite) - 1);
 
     if (error) {
@@ -213,8 +187,7 @@ export async function atualizarStatusDepoimento(req: AuthenticatedRequest, res: 
       .from('depoimentos')
       .update({
         status,
-        atualizado_em: new Date().toISOString(),
-        atualizado_por: req.user?.userId
+        updated_at: new Date().toISOString()
       })
       .eq('id', id);
 
