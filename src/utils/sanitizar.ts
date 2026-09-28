@@ -21,5 +21,5 @@ export function sanitizarHtml(html: string): string {
 }
 
 export function textoDoHtml(html: string): string {
-  return sanitizeHtml(html, CONFIG_SO_TEXTO).replace(/ |&nbsp;/g, ' ').trim();
+  return sanitizeHtml(html, CONFIG_SO_TEXTO).replace(/\u00a0|&nbsp;/g, ' ').trim();
 }
